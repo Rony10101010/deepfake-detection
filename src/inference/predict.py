@@ -55,15 +55,7 @@ def preprocess_image(
     image: Union[str, Image.Image],
     size: Tuple[int, int] = (224, 224),
 ) -> torch.Tensor:
-    """Open and preprocess an image for model input.
-
-    Args:
-        image: Path to an image file or a PIL image object.
-        size: Desired output size (H, W).
-
-    Returns:
-        Tensor of shape (C, H, W) with normalization applied.
-    """
+    """Open and preprocess an image for model input."""
     if isinstance(image, str):
         image = Image.open(image).convert("RGB")
     else:
@@ -102,18 +94,7 @@ def predict_with_gradcam(
     device: torch.device | None = None,
     save_dir: str | None = None,
 ) -> Tuple[int, float, np.ndarray, np.ndarray]:
-    """Perform inference with Grad-CAM visualization.
-
-    Args:
-        model: Evaluation model.
-        image: Input image path or PIL image.
-        device: Computation device.
-        save_dir: Optional directory where Grad-CAM outputs are saved.
-
-    Returns:
-        Tuple of:
-        (predicted_class, confidence, heatmap, overlay)
-    """
+    """Perform inference with Grad-CAM visualization."""
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -125,7 +106,6 @@ def predict_with_gradcam(
         transform=transform,
         device=device,
         save_dir=save_dir,
-        
     )
 
 
@@ -162,7 +142,9 @@ if __name__ == "__main__":
         save_dir=args.save_dir,
     )
 
-    class_name = CLASS_NAMES[pred_class] if pred_class < len(CLASS_NAMES) else str(pred_class)
+    class_name = (
+        CLASS_NAMES[pred_class] if pred_class < len(CLASS_NAMES) else str(pred_class)
+    )
 
     print(f"Predicted class: {class_name}")
     print(f"Confidence: {confidence:.4f}")

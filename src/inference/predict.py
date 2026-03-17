@@ -16,6 +16,7 @@ from PIL import Image
 import torch
 from torchvision import transforms
 
+from src.data.dataset_loader import build_transforms
 from src.explainability import gradcam
 
 
@@ -38,17 +39,9 @@ def load_trained_model(
 def _build_inference_transform(
     size: Tuple[int, int] = (224, 224),
 ) -> transforms.Compose:
-    """Build the preprocessing pipeline used for inference."""
-    return transforms.Compose(
-        [
-            transforms.Resize(size),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
-            ),
-        ]
-    )
+    """Build the preprocessing pipeline used for inference, reusing the same logic as dataset_loader for consistency with Colab."""
+    _, valid_transform = build_transforms(size=size)
+    return valid_transform
 
 
 def preprocess_image(
@@ -102,7 +95,7 @@ def predict_with_gradcam(
 
     return gradcam.predict_with_gradcam(
         model=model,
-        pil_image=image,
+        image=image,
         transform=transform,
         device=device,
         save_dir=save_dir,

@@ -9,8 +9,6 @@ This module provides a simple Tkinter-based GUI application that allows users to
 
 The application reuses inference utilities from:
 - src.inference.predict
-- src.explainability.gradcam
-- src.models.vgg16_model
 
 Design goals:
 - Simple and intuitive user interface
@@ -19,13 +17,13 @@ Design goals:
 """
 
 from __future__ import annotations
-
+import argparse
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from pathlib import Path
 from typing import Optional
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image, ImageTk
@@ -34,45 +32,35 @@ import torch
 from src.inference import predict
 
 
-# Constants
 CLASS_NAMES = ["fake", "real"]
 WINDOW_TITLE = "Deepfake Detection Demo"
 IMG_DISPLAY_SIZE = (400, 400)
-DEFAULT_CHECKPOINT = "outputs/models/vgg16_checkpoint.pth"
+VIS_DISPLAY_SIZE = (400, 400)
+DEFAULT_CHECKPOINT = "best_model_50k_10ep.pth"
 
 
 class DeepfakeDetectorApp:
     """Tkinter-based desktop application for deepfake detection."""
 
     def __init__(self, root: tk.Tk, checkpoint_path: Optional[str] = None):
-        """Initialize the application.
-
-        Args:
-            root: The Tkinter root window.
-            checkpoint_path: Path to the trained model checkpoint.
-                If None, defaults to outputs/models/vgg16_checkpoint.pth
-        """
         self.root = root
         self.root.title(WINDOW_TITLE)
         self.root.geometry("1000x800")
 
-        # Checkpoint path
         self.checkpoint_path = checkpoint_path or DEFAULT_CHECKPOINT
 
-        # State
         self.model: Optional[torch.nn.Module] = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")
         self.current_image_path: Optional[str] = None
-        self.current_image_pil: Optional[Image.Image] = None
-        self.photo_image: Optional[ImageTk.PhotoImage] = None
 
-        # Build UI
+        self.photo_image: Optional[ImageTk.PhotoImage] = None
+        self.heatmap_photo: Optional[ImageTk.PhotoImage] = None
+        self.overlay_photo: Optional[ImageTk.PhotoImage] = None
+
         self._build_ui()
         self._load_model()
 
     def _build_ui(self) -> None:
-        """Build the user interface components."""
-        # Top control panel
         control_frame = tk.Frame(self.root, bg="#f0f0f0", padx=10, pady=10)
         control_frame.pack(side=tk.TOP, fill=tk.X)
 
@@ -113,11 +101,9 @@ class DeepfakeDetectorApp:
             font=("Arial", 10),
         ).pack(side=tk.LEFT, padx=5)
 
-        # Main content area
         content_frame = tk.Frame(self.root)
         content_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Left: Image display
         left_frame = tk.Frame(content_frame)
         left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
@@ -137,7 +123,6 @@ class DeepfakeDetectorApp:
         )
         self.image_label.pack(fill=tk.BOTH, expand=True)
 
-        # File path label
         self.filepath_label = tk.Label(
             left_frame,
             text="",
@@ -147,7 +132,6 @@ class DeepfakeDetectorApp:
         )
         self.filepath_label.pack(anchor=tk.W, pady=(5, 0))
 
-        # Right: Results panel
         right_frame = tk.Frame(content_frame, bg="white", relief=tk.SUNKEN, bd=1)
         right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
 
@@ -158,7 +142,6 @@ class DeepfakeDetectorApp:
             bg="white",
         ).pack(anchor=tk.W, padx=10, pady=(10, 5))
 
-        # Prediction result
         self.prediction_label = tk.Label(
             right_frame,
             text="Status: Ready",
@@ -168,12 +151,8 @@ class DeepfakeDetectorApp:
         )
         self.prediction_label.pack(anchor=tk.W, padx=10, pady=5)
 
-        # Separator
-        tk.Frame(right_frame, height=1, bg="gray").pack(
-            fill=tk.X, padx=10, pady=10
-        )
+        tk.Frame(right_frame, height=1, bg="gray").pack(fill=tk.X, padx=10, pady=10)
 
-        # Grad-CAM visualization
         tk.Label(
             right_frame,
             text="Grad-CAM Visualization",
@@ -181,7 +160,6 @@ class DeepfakeDetectorApp:
             bg="white",
         ).pack(anchor=tk.W, padx=10, pady=(10, 5))
 
-        # Heatmap and overlay display
         self.gradcam_frame = tk.Frame(right_frame, bg="white")
         self.gradcam_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
@@ -205,13 +183,12 @@ class DeepfakeDetectorApp:
         )
         self.overlay_label.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
-        # Status bar
         status_frame = tk.Frame(self.root, bg="#e0e0e0", padx=10, pady=5)
         status_frame.pack(side=tk.BOTTOM, fill=tk.X)
 
         self.status_label = tk.Label(
             status_frame,
-            text="Model loaded. Ready to detect.",
+            text="Ready.",
             font=("Arial", 9),
             bg="#e0e0e0",
             justify=tk.LEFT,
@@ -219,15 +196,14 @@ class DeepfakeDetectorApp:
         self.status_label.pack(anchor=tk.W)
 
     def _load_model(self) -> None:
-        """Load the trained model from checkpoint."""
         if not os.path.exists(self.checkpoint_path):
             messagebox.showwarning(
                 "Model Not Found",
-                f"Checkpoint not found at {self.checkpoint_path}\n\n"
-                "Please train the model first or provide a valid checkpoint path.",
+                f"Checkpoint not found at:\n{self.checkpoint_path}\n\n"
+                "Provide a valid .pth file path when launching the app.",
             )
             self.status_label.config(
-                text=f"Error: Checkpoint not found at {self.checkpoint_path}"
+                text=f"Checkpoint not found: {self.checkpoint_path}"
             )
             return
 
@@ -236,7 +212,8 @@ class DeepfakeDetectorApp:
             self.root.update()
 
             self.model = predict.load_trained_model(
-                self.checkpoint_path, device=self.device
+                self.checkpoint_path,
+                device=self.device,
             )
 
             self.status_label.config(text="Model loaded successfully.")
@@ -245,7 +222,6 @@ class DeepfakeDetectorApp:
             self.status_label.config(text=f"Error loading model: {e}")
 
     def _on_select_image(self) -> None:
-        """Handle image selection dialog."""
         filetypes = [
             ("Image files", "*.png *.jpg *.jpeg *.bmp *.gif"),
             ("All files", "*.*"),
@@ -259,18 +235,13 @@ class DeepfakeDetectorApp:
             return
 
         self.current_image_path = file_path
-        self._display_image(file_path)
+        self._display_input_image(file_path)
         self.filepath_label.config(text=f"File: {file_path}")
 
-    def _display_image(self, image_path: str) -> None:
-        """Display the selected image in the GUI.
-
-        Args:
-            image_path: Path to the image file.
-        """
+    def _display_input_image(self, image_path: str) -> None:
         try:
-            self.current_image_pil = Image.open(image_path).convert("RGB")
-            img_resized = self.current_image_pil.copy()
+            pil_image = Image.open(image_path).convert("RGB")
+            img_resized = pil_image.copy()
             img_resized.thumbnail(IMG_DISPLAY_SIZE, Image.Resampling.LANCZOS)
 
             self.photo_image = ImageTk.PhotoImage(img_resized)
@@ -278,13 +249,14 @@ class DeepfakeDetectorApp:
             self.image_label.image = self.photo_image
 
             self._clear_results()
-            self.status_label.config(text="Image loaded. Click 'Run Detection' to analyze.")
+            self.status_label.config(
+                text="Image loaded. Click 'Run Detection' to analyze."
+            )
         except Exception as e:
             messagebox.showerror("Image Loading Error", f"Failed to load image:\n{e}")
             self.status_label.config(text=f"Error loading image: {e}")
 
     def _on_run_detection(self) -> None:
-        """Handle detection button click."""
         if self.model is None:
             messagebox.showwarning("Model Not Loaded", "Please load a model first.")
             return
@@ -301,11 +273,11 @@ class DeepfakeDetectorApp:
                 model=self.model,
                 image=self.current_image_path,
                 device=self.device,
+                save_dir=None,
             )
 
             self._display_results(pred_class, confidence, heatmap, overlay)
             self.status_label.config(text="Detection complete.")
-
         except Exception as e:
             messagebox.showerror("Detection Error", f"Failed to run detection:\n{e}")
             self.status_label.config(text=f"Error during detection: {e}")
@@ -317,15 +289,6 @@ class DeepfakeDetectorApp:
         heatmap: np.ndarray,
         overlay: np.ndarray,
     ) -> None:
-        """Display prediction results and visualizations.
-
-        Args:
-            pred_class: Predicted class index (0=fake, 1=real).
-            confidence: Confidence score (0-1).
-            heatmap: Grad-CAM heatmap array.
-            overlay: Heatmap overlaid on original image.
-        """
-        # Update prediction label
         class_name = (
             CLASS_NAMES[pred_class]
             if pred_class < len(CLASS_NAMES)
@@ -334,53 +297,61 @@ class DeepfakeDetectorApp:
         result_text = f"Prediction: {class_name.upper()}\nConfidence: {confidence:.2%}"
         self.prediction_label.config(text=result_text)
 
-        # Display heatmap
-        self._display_array_as_image(heatmap, self.heatmap_label, cmap="jet")
-
-        # Display overlay
-        self._display_array_as_image(overlay, self.overlay_label, cmap=None)
+        self._display_array_as_image(heatmap, self.heatmap_label, cmap="jet", kind="heatmap")
+        self._display_array_as_image(overlay, self.overlay_label, cmap=None, kind="overlay")
 
     def _display_array_as_image(
         self,
         array: np.ndarray,
         label: tk.Label,
         cmap: Optional[str] = None,
+        kind: str = "overlay",
     ) -> None:
-        """Convert a numpy array to an image and display it in a label.
-
-        Args:
-            array: Numpy array (H × W or H × W × 3).
-            label: Tkinter label to display the image.
-            cmap: Colormap name (if None, treat as RGB).
-        """
         try:
-            if cmap:
-                # Apply colormap
-                colored = plt.cm.get_cmap(cmap)(array)
+            if cmap is not None:
+                # Resize small Grad-CAM map before applying colormap
+                if array.ndim == 2:
+                    array_resized = cv2.resize(array, VIS_DISPLAY_SIZE, interpolation=cv2.INTER_CUBIC)
+                else:
+                    array_resized = array
+
+                colored = plt.colormaps[cmap](array_resized)
                 img_array = (colored[:, :, :3] * 255).astype(np.uint8)
             else:
-                # Assume RGB
-                img_array = (array * 255).astype(np.uint8) if array.max() <= 1.0 else array.astype(np.uint8)
+                if array.max() <= 1.0:
+                    img_array = (array * 255).astype(np.uint8)
+                else:
+                    img_array = array.astype(np.uint8)
+
+                # Resize overlay image to display size with cubic interpolation
+                img_array = cv2.resize(img_array, VIS_DISPLAY_SIZE, interpolation=cv2.INTER_CUBIC)
 
             img = Image.fromarray(img_array)
-            img.thumbnail((200, 150), Image.Resampling.LANCZOS)
-
             photo = ImageTk.PhotoImage(img)
+
             label.config(image=photo, text="")
-            label.image = photo
+
+            if kind == "heatmap":
+                self.heatmap_photo = photo
+                label.image = self.heatmap_photo
+            else:
+                self.overlay_photo = photo
+                label.image = self.overlay_photo
+
         except Exception as e:
             label.config(text=f"Error: {e}")
 
     def _clear_results(self) -> None:
-        """Clear all result displays."""
         self.prediction_label.config(text="Status: Ready")
         self.heatmap_label.config(image="", text="Heatmap")
         self.overlay_label.config(image="", text="Overlay")
+        self.heatmap_label.image = None
+        self.overlay_label.image = None
+        self.heatmap_photo = None
+        self.overlay_photo = None
 
     def _on_clear(self) -> None:
-        """Handle clear button click."""
         self.current_image_path = None
-        self.current_image_pil = None
         self.photo_image = None
 
         self.image_label.config(image="", text="No image selected")
@@ -391,20 +362,12 @@ class DeepfakeDetectorApp:
 
 
 def main(checkpoint_path: Optional[str] = None) -> None:
-    """Launch the desktop application.
-
-    Args:
-        checkpoint_path: Optional path to a trained model checkpoint.
-            If not provided, defaults to outputs/models/vgg16_checkpoint.pth
-    """
     root = tk.Tk()
-    app = DeepfakeDetectorApp(root, checkpoint_path=checkpoint_path)
+    DeepfakeDetectorApp(root, checkpoint_path=checkpoint_path)
     root.mainloop()
 
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Launch the deepfake detection desktop application."
     )

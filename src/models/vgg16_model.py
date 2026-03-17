@@ -1,25 +1,5 @@
-"""VGG16 model module for deepfake detection.
+"""VGG16 model module for deepfake detection."""
 
-This module provides a function to create a VGG16 model adapted for binary
-classification (real vs. fake). The model uses a pretrained VGG16 backbone
-from ImageNet, with a modified classifier head that includes dropout for
-regularization.
-
-The classifier structure is:
-- Fully connected layer (4096 units)
-- Dropout
-- Output layer (2 units for binary classification)
-
-Example usage::
-
-    from src.models.vgg16_model import create_model
-
-    model = create_model(num_classes=2, freeze_features=True)
-    # Model is ready for training with frozen backbone
-
-"""
-
-import torch
 import torch.nn as nn
 import torchvision.models as models
 
@@ -27,40 +7,29 @@ import torchvision.models as models
 def create_model(
     num_classes: int = 2,
     freeze_features: bool = True,
+    use_pretrained: bool = True,
 ) -> models.VGG:
-    """Create a VGG16 model for binary classification.
+    """Create a VGG16 model for binary classification."""
 
-    Loads a pretrained VGG16 model, replaces the classifier head with a
-    custom sequence suitable for binary classification, and optionally
-    freezes the convolutional backbone.
+    if use_pretrained:
+        model = models.vgg16(weights=models.VGG16_Weights.IMAGENET1K_V1)
+    else:
+        model = models.vgg16(weights=None)
 
-    Args:
-        num_classes: number of output classes (default 2 for binary).
-        freeze_features: if True, freeze the convolutional layers to train
-            only the classifier head initially.
+    # Disable in-place ReLU everywhere to avoid Grad-CAM backward hook errors
+    for module in model.modules():
+        if isinstance(module, nn.ReLU):
+            module.inplace = False
 
-    Returns:
-        A PyTorch VGG16 model with modified classifier, ready for training.
-    """
-
-    # Load pretrained VGG16
-    model = models.vgg16(pretrained=True)
-
-    # Replace the classifier with a custom head
-    # Original classifier input features: 25088
     model.classifier = nn.Sequential(
-        nn.Linear(25088, 4096),  # Fully connected layer
-        nn.ReLU(inplace=True),
-        nn.Dropout(p=0.5),       # Dropout for regularization
-        nn.Linear(4096, num_classes),  # Output layer
+        nn.Linear(25088, 4096),
+        nn.ReLU(inplace=False),
+        nn.Dropout(p=0.5),
+        nn.Linear(4096, num_classes),
     )
 
-    # Optionally freeze the feature extractor (convolutional layers)
     if freeze_features:
         for param in model.features.parameters():
             param.requires_grad = False
 
     return model
-
-
-# end of file

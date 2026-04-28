@@ -150,6 +150,8 @@ train_model(...)  # configure args in Python or notebook
 - **Feature freezing support** — convolutional layers can be frozen for faster fine-tuning
 
 ---
+## License
+MIT License
 
 ## 👤 Author
 
